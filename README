@@ -1,0 +1,271 @@
+        PostgreSQL database session save handler module
+
+[What is it]
+
+session_pgsql is an additional session save handler module. It
+provides session storage using PostgreSQL database server(s). 
+
+ - C implantation of session save handler with PostgreSQL. It could
+   twice as fast or more compare to script version of save handler.
+ - Automatic session table creation.
+ - Better garbage collection.
+ - Multiple PostgreSQL servers support.
+ - Automatic db server failover(switching) when there is trouble.
+ - Automatic db server load balancing where there are multiple
+   PostgreSQL servers.
+ - Automatic session table vacuum.
+ - Short circuit UPDATE
+
+It is design to scale any size of web sites.
+
+[Requirements]
+PHP 4.3.0 or later
+PostgreSQL 7.2.0 or later as server
+libpq that comes with PostgreSQL 7.2.0 or later (and header to build)
+libmm (and header. I use mm-1.2.1)
+
+[How to compile]
+
+To compile PHP with mod_pgsql, you need "--with-session-pgsql[=DIR]"
+when you configure PHP. [=DIR] is installation path for
+PostgreSQL. You don't have to compile PHP with PostgreSQL module, but
+your system must have libpq and headers installed.  It also uses libmm
+your system must have libmm and headers installed to compile.
+
+1. Change directory to <php source root>/ext and move tar ball to
+   there.
+2. Unpack session_pgsql source
+   % tar zxvf session_pgsql-<version>.tar.bz2
+   You may need to bunzip first if your tar don't recognize bz2 
+   compression
+3. Change directory to <php source root> then
+   % ./buildconf
+   % ./configure --with-session-pgsql <other configure options>
+   % make
+   % make install
+4. If you choose to build stand alone module with "--with-session-pgsql=shared"
+   Do not forget to edit php.ini to load session_pgsql.so.
+5. Reboot your web server.
+
+You may also want to compile session pgsql as stand alone PHP module.
+To compile session_pgsql as stand alone module without PHP source, you
+need PHP header and build tools installed. These files are install when
+"make install" is done with PHP source. If you are using RPM, these files
+are likely included in php-devel package.
+
+1. Unpack session_pgsql source.
+   % tar zxvf session_pgsql-<version>.tar.bz2
+2. Change directory to session_pgsql
+   % cd session_pgsql
+3. Run phpize. This will creates configure script and files needed.
+   % phpize
+4. Run configure script, build and install module
+   % ./configure --with-session-pgsql
+   % make
+   % make install
+   This will build and install session_pgsql.so module and install
+   the module file to php module directory.
+5. Edit your php.ini to load session_pgsql. Add following line to
+   php.ini
+   extension=session_pgsql.so
+6. Verify with phpinfo() if session_pgsql is loaded or not. If it's
+   not loaded, try to use full path to load module.
+7. Reboot your web server.
+
+Finally, do no forget to edit session_pgsql.db php.ini directive.
+See following sections for the ini directive usage.
+
+[How to use]
+
+Once you have successfully installed session_pgsql (and PHP of course)
+and PostgreSQL to localhost. All you have to do is (as postgres super user)
+
+% createuser nobody
+% createdb php_session
+
+In your php.ini
+session.save_handler = pgsql
+or
+In your script (make sure you call it *before* staring session)
+session_module_name('pgsql');
+
+session_pgsql connects to local PostgreSQL backend and create session
+table automatically if needed. If you would like to use remote PostgreSQL
+server or even multiple PostgreSQL servers, edit session_pgsql.db php.ini
+configuration directive.
+
+NOTE: It cannot be used with CGI/CLI binary or dl() or loading from .htaccess.
+NOTE: It's good idea to have more secure setting. Change security options 
+      according your security needs.
+
+[php.ini settings]
+
+Following php.ini directives are recognized by session and session_pgsql
+module.
+
+session.save_handler
+  "pgsql" for session_pgsql session.
+
+session.*
+  save_path is ignored. Other session.* settings are also used for
+  session_pgsql.
+
+session_pgsql.db          
+  Valid PostgreSQL database connection string. 
+  For example, "host=localhost dbname=php_session user=nobody" can
+  be set. This example is the default.
+  You can specify multiple PostgreSQL by separating ";". e.g.
+  "host=server1 dbname=php_session user=nobody;host=server2 dbname=php_session user=nobody"
+  If multiple servers are set, session_pgsql automatically balance 
+  db server loads. If one of session db server fails, it will try to
+  use available db server automatically.
+  NOTE: database name must be "php_session". Other connection options
+        may be changed.
+  NOTE: If you have multiple web/db servers, make sure session_pgsql.db
+        is the same value for all web servers.
+  Default is "host=localhost dbname=php_session user=nobody"
+
+session_pgsql.keep_expired
+  Keep expired data except session values. Counter, created time, created
+  IP address, etc is kept when this is set to on. If this option is off
+  session record is deleted and insert record is created. 
+  Default is off. 
+
+session_pgsql.use_app_vars 
+  Use application level variable ($_APP) or not.
+  Use different session name to change application.
+  i.e. use session_name('AppName')
+  Use of application variable has severe performance penalty.
+  Default is off.
+
+session_pgsql.create_table
+  Automatically create session and application variable table
+  if set to on. session_pgsql creates tables, php_session and php_app_vers,
+  in the database. Default is on.
+
+session_pgsql.short_circuit
+  If short_circuit is set to on, it will skip UPDATE statement when 
+  skipping is possible. Setting error or custom field value or SESSION
+  array will make session_pgsql save changes to table, otherwise
+  it will not update table.  Access counter and expire field will not 
+  be updated when update is skipped.
+  Default is off.
+
+session_pgsql.failover_mode
+  If failover_mode is set to on, it will always use 1st db server
+  and if 1st server fails, it will use next available db server.
+  create session and application variable table
+  if set to on. If this option is enabled, load balancing session 
+  db server will not be enabled. Default is off.
+  NOTE: session_pgsql do not mirror session data. It just switch
+  to other database server to continue web services.
+  Default is off.
+
+session_pgsql.gc_interval
+  How often perform GC in seconds. 
+  If you set multiple db servers to session_pgsql.db, set only
+  one of your web server to prevent unneeded garbage collections.
+  It is good idea set to 0 (disable) and perform garbage collection
+  by using cron or like in db server if you have multiple web servers
+  accessed to the session db server(s).
+  NOTE: It's good idea performing garbage collection using cron or like.
+  Default is 3600 seconds (1 hour).
+
+session_pgsql.vacuum_interval
+  How often perform GC in seconds. 
+  If you set multiple db servers to session_pgsql.db, set only
+  one of your web server to prevent unneeded vacuum operations.
+  It is good idea set to 0 (disable) and perform vacuum
+  by using cron or like in db server if you have multiple web servers
+  accessed to the session db server(s).
+  NOTE: It's good idea performing vaccum and reindex using cron or like.
+  Default is 21600 seconds (6 hours).
+
+[Module Functions]
+/* {{{ proto array session_pgsql_status(void)
+   Returns current pgsql save handler status */
+/* {{{ proto bool session_pgsql_reset(void)
+   Reset connection to session database servers */
+/* {{{ proto array session_pgsql_info(void)
+   Returns current session info */
+/* {{{ proto bool session_pgsql_set_field(string value)
+   Set custom field value */
+/* {{{ proto string session_pgsql_get_field(void)
+   Get custom field value */
+/* {{{ proto bool session_pgsql_add_error(int error_level [, string error_message])
+   Increments error counts and sets last error message */
+/* {{{ proto array session_pgsql_get_error([bool with_error_message])
+   Returns number of errors and last error message */
+
+[Known Problem]
+Please report problem to the author.
+
+[Session Table Definition]
+
+CREATE TABLE php_session (
+  sess_id            text,
+  sess_name          text,
+  sess_data          text,
+  sess_created       integer,
+  sess_modified      integer,
+  sess_expire        integer,
+  sess_addr_created  text,
+  sess_addr_modified text,
+  sess_counter       integer,
+  sess_error         integer,
+  sess_warning       integer,
+  sess_notice        integer,
+  sess_err_message   text,
+  sess_custom        text
+);
+
+CREATE INDEX php_session_idx ON php_session USING BTREE (sess_id);
+
+[Application Variable Table Definition]
+
+CREATE TABLE php_app_vars (
+  app_modified       integer,
+  app_name           text,
+  app_vars           text
+);
+ 
+
+NOTE: If you use HASH for index, you'll have deadlock problem when
+server load *very* high. Even if it's unlikely to have deadlock under 
+normal operation, but it can. DO NOT USE HASH INDEX.
+
+User may change session table as long as all fields are defined.
+
+[ToDo]
+ - More efficient application variable handling
+
+[History]
+ 1.0.0 - 2003/?/??
+  - Stable release.
+
+ 0.6.1 - 2003/1/19
+  - Stable release candidate.
+
+ 0.6.0 - 2003/1/18
+  - Stable release candidate.
+
+ 0.5.2 - 2003/1/17
+  - Fixed shared module build.
+
+ 0.5.1 - 2003/1/17
+  - Fixed short_circuit option. 
+
+ 0.5.0 - 2003/1/17
+  - Added short_circuit option. 
+
+ 0.4.1 - 2003/1/16
+  - Added all features planned. Alpha release.
+
+ 0.4.0 - 2003/1/15
+  - Implemented most features that are planned.
+   
+ 0.2.0 - 2002/2/20
+  - Added application variable support.
+
+ 0.1.0 - 2002/1/12
+  - Initial test release.
