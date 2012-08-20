@@ -803,7 +803,6 @@ static int ps_pgsql_sess_read(const char *key, char **val, int *vallen TSRMLS_DC
 			PQclear(pg_result);
 			return FAILURE;
 		}
-		PQclear(pg_result);
 	}
 
 	PS_PGSQL(sess_new) = 0;
