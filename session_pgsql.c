@@ -81,7 +81,7 @@ static int ps_pgsql_sess_gc(TSRMLS_D);
 
 /* read */
 #define SQL_READ_BEGIN  "BEGIN;"
-#define SQL_READ_BEGIN_SERIALIZABLE  "BEGIN; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;"
+#define SQL_READ_SERIALIZABLE  "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;"
 #define SQL_READ_SELECT "SELECT sess_expire, sess_counter, sess_error, sess_warning, sess_notice, sess_data, sess_custom, sess_created, sess_modified, sess_addr_created, sess_addr_modified FROM php_session WHERE sess_id = $1;"
 /* wirte */
 #define SQL_WRITE_DELETE "DELETE FROM php_session WHERE sess_id = $1;"
@@ -444,7 +444,7 @@ static int php_ps_pgsql_prepare_sql(PGconn *conn)
 	PQclear(pg_result);
 	pg_result = PQprepare(conn, "READ_BEGIN", SQL_READ_BEGIN, 0, NULL);
 	PQclear(pg_result);
-	pg_result = PQprepare(conn, "READ_BEGIN_SERIALIZABLE", SQL_READ_BEGIN_SERIALIZABLE, 0, NULL);
+	pg_result = PQprepare(conn, "READ_SERIALIZABLE", SQL_READ_SERIALIZABLE, 0, NULL);
 	PQclear(pg_result);
 	pg_result = PQprepare(conn, "READ_SELECT", SQL_READ_SELECT, 1, NULL);
 	PQclear(pg_result);
@@ -782,22 +782,21 @@ static int ps_pgsql_sess_read(const char *key, char **val, int *vallen TSRMLS_DC
 	int ret = FAILURE;
 
 	/* start reading */
-	if (PS_PGSQL(serializable)) {
-		pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN_SERIALIZABEL", 0, NULL, NULL, NULL, 0);
-	}
-	else {
-		pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN", 0, NULL, NULL, NULL, 0);
-	}
+	pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN", 0, NULL, NULL, NULL, 0);
 	PQclear(pg_result);
+	if (PS_PGSQL(serializable)) {
+		pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_SERIALIZABLE", 0, NULL, NULL, NULL, 0);
+		PQclear(pg_result);
+	}
 	if (PQresultStatus(pg_result) != PGRES_COMMAND_OK) {
 		/* try again. server may be rebooted */
 		PQreset(PS_PGSQL(current_db));
 		php_ps_pgsql_prepare_sql(PS_PGSQL(current_db));
+		pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN", 0, NULL, NULL, NULL, 0);
+		PQclear(pg_result);
 		if (PS_PGSQL(serializable)) {
-			pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN_SERIALIZABEL", 0, NULL, NULL, NULL, 0);
-		}
-		else {
-			pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN", 0, NULL, NULL, NULL, 0);
+			pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_SERIALIZABLE", 0, NULL, NULL, NULL, 0);
+			PQclear(pg_result);
 		}
 		if (PQresultStatus(pg_result) != PGRES_COMMAND_OK) {
 			php_error(E_WARNING, "session pgsql: Cannot start transaction. (%s)", PQresultErrorMessage(pg_result));
