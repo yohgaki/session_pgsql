@@ -71,6 +71,26 @@ static int ps_pgsql_sess_gc(TSRMLS_D);
 #define PS_PGSQL_DATA ps_pgsql *data = PS_GET_MOD_DATA()
 #define QUERY_BUF_SIZE 256
 #define BUF_SIZE 512
+#define STRBUF_LEN 32
+
+/* $_APP read */
+#define SQL_APP_READ "SELECT app_vars FROM php_app_vars WHERE app_name = $1;"
+/* $_APP write */
+#define SQL_APP_WRITE_INSERT "INSERT INTO php_app_vars (app_modified, app_name, app_vars) VALUES ($1, $2, $3);"
+#define SQL_APP_WRITE_UPDATE "UPDATE php_app_vars SET app_modified = $1, app_vars = $2"
+
+/* read */
+#define SQL_READ_BEGIN  "BEGIN;"
+#define SQL_READ_BEGIN_SERIALIZABLE  "BEGIN; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;"
+#define SQL_READ_SELECT "SELECT sess_expire, sess_counter, sess_error, sess_warning, sess_notice, sess_data, sess_custom, sess_created, sess_modified, sess_addr_created, sess_addr_modified FROM php_session WHERE sess_id = $1;"
+/* wirte */
+#define SQL_WRITE_DELETE "DELETE FROM php_session WHERE sess_id = $1;"
+#define SQL_WRITE_INSERT "INSERT INTO php_session (sess_id, sess_name, sess_created, sess_addr_created, sess_modified, sess_expire, sess_data, sess_counter, sess_error, sess_warning, sess_notice, sess_custom) VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 0, 0, 0, $8);"
+#define SQL_WRITE_UPDATE "UPDATE php_session SET sess_data = $1, sess_modified = $2, sess_addr_modified = $3, sess_expire = $4 , sess_counter = $5, sess_error = $6, sess_warning = $7 , sess_notice = $8, sess_custom = $9 WHERE sess_id = $10;"
+#define SQL_WRITE_ERROR "UPDATE php_session SET sess_err_message = $1 WHERE sess_id=$2;"
+#define SQL_WRITE_END   "END;"
+
+
 
 #if 0
 #define ELOG( x )   php_log_err( x TSRMLS_CC)
@@ -329,6 +349,7 @@ PHP_RSHUTDOWN_FUNCTION(session_pgsql)
 }
 /* }}} */
 
+
 /* {{{ PHP_MINFO_FUNCTION
  */
 PHP_MINFO_FUNCTION(session_pgsql)
@@ -341,6 +362,7 @@ PHP_MINFO_FUNCTION(session_pgsql)
 	DISPLAY_INI_ENTRIES();
 }
 /* }}} */
+
 
 /* {{{ php_session_pgsql_init_globals
  */
@@ -359,6 +381,7 @@ static void php_session_pgsql_init_globals(php_session_pgsql_globals *session_pg
 	PS_PGSQL(sess_val) = NULL;
 }
 /* }}} */
+
 
 /* {{{ php_ps_pgsql_init_mm
  */
@@ -405,6 +428,42 @@ static int php_ps_pgsql_init_mm(TSRMLS_D)
 }
 /* }}} */
 
+
+/* {{{ php_ps_pgsql_preapare_sql()
+ */
+static int php_ps_pgsql_prepare_sql(PGconn *conn)
+{
+	PGresult *pg_result;
+	int err = 0;
+
+	pg_result = PQprepare(conn, "APP_READ", SQL_APP_READ, 1, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "APP_WRITE_INSERT", SQL_APP_WRITE_INSERT, 3, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "APP_WRITE_UPDATE", SQL_APP_WRITE_UPDATE, 2, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "READ_BEGIN", SQL_READ_BEGIN, 0, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "READ_BEGIN_SERIALIZABLE", SQL_READ_BEGIN_SERIALIZABLE, 0, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "READ_SELECT", SQL_READ_SELECT, 1, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "WRITE_DELETE", SQL_WRITE_DELETE, 1, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "WRITE_INSERT", SQL_WRITE_INSERT, 9, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "WRITE_UPDATE", SQL_WRITE_UPDATE, 10, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "WRITE_ERROR", SQL_WRITE_ERROR, 2, NULL);
+	PQclear(pg_result);
+	pg_result = PQprepare(conn, "WRITE_END", SQL_WRITE_END, 0, NULL);
+	PQclear(pg_result);
+
+	return SUCCESS;
+}
+
+
+
 /* {{{ php_ps_pgsql_init_servers
  */
 static int php_ps_pgsql_init_servers(const int force_init TSRMLS_DC) 
@@ -443,6 +502,8 @@ static int php_ps_pgsql_init_servers(const int force_init TSRMLS_DC)
 	return FAILURE;
 }
 /* }}} */
+
+
 
 /* {{{ php_pg_pgsql_create_table
  */
@@ -633,16 +694,8 @@ static int ps_pgsql_app_read(TSRMLS_D)
 	if (PS_PGSQL(use_app_vars)) {
 		PGconn *pg_link = PS_PGSQL(current_db);
 		PGresult *pg_result;
-		char query[QUERY_BUF_SIZE+1];
-		char *escaped_session_name;
-		size_t len, session_name_len;
 		
-		len = strlen(PS(session_name));
-		escaped_session_name = emalloc(len*2 + 1);
-		session_name_len = PQescapeStringConn(PS_PGSQL(current_db), escaped_session_name, PS(session_name), len, NULL);
-		snprintf(query, QUERY_BUF_SIZE, "SELECT app_vars FROM php_app_vars WHERE app_name = '%s';", escaped_session_name);
-		efree(escaped_session_name);
-		pg_result = PQexec(pg_link, query);
+		pg_result = PQexecPrepared(pg_link, "APP_READ", 1, (const char * const*)&PS(session_name), NULL, NULL, 0);
 		MAKE_STD_ZVAL(PS_PGSQL(app_vars));
 		if (PQresultStatus(pg_result) == PGRES_TUPLES_OK) {
 			if (PQntuples(pg_result) == 0) {
@@ -663,13 +716,14 @@ static int ps_pgsql_app_read(TSRMLS_D)
 				PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
 				ZEND_SET_GLOBAL_VAR_WITH_LENGTH("_APP", sizeof("_APP"), PS_PGSQL(app_vars), 1, 0);
 			}
+			PQclear(pg_result);
 		}
 		else {
-			php_error(E_WARNING,"Session pgsql READ(applicatoin vars) failed: %s (%s)",
-					  PQresultErrorMessage(pg_result), query);
+			PQclear(pg_result);
 			ret = FAILURE;
+			php_error(E_WARNING,"Session pgsql READ(applicatoin vars) failed: %s (%s)",
+					  PQresultErrorMessage(pg_result), PS(session_name));
 		}
-		PQclear(pg_result);
 	}
 	return ret;
 }
@@ -681,45 +735,38 @@ static int ps_pgsql_app_write(TSRMLS_D)
 {
 	PGconn *pg_link = PS_PGSQL(current_db);
 	PGresult *pg_result;
-	char *query_insert = "INSERT INTO php_app_vars (app_modified, app_name, app_vars) VALUES (%d, '%s', '%s');";
-	char *query_update = "UPDATE php_app_vars SET app_modified = %d, app_vars = '%s'";
-	char *query = NULL;
-	unsigned char *escaped_data;
-	size_t escaped_data_len = 0, query_len;
-	php_serialize_data_t var_hash;
 	smart_str buf = {0};
+	php_serialize_data_t var_hash;
+	char now_str[STRBUF_LEN+1];
+	char *params[3];
 
 	PHP_VAR_SERIALIZE_INIT(var_hash);
 	php_var_serialize(&buf, &(PS_PGSQL(app_vars)), &var_hash TSRMLS_CC);
 	PHP_VAR_SERIALIZE_DESTROY(var_hash);
 
-	assert(buf.c && buf.len);
-	escaped_data = (char *)emalloc(buf.len*2+1);
-	escaped_data_len = PQescapeStringConn(PS_PGSQL(current_db), escaped_data, buf.c, buf.len, NULL);
+	snprintf(now_str, STRBUF_LEN, "%d", time(NULL));
 	if (PS_PGSQL(app_new)) {
 		/* INSERT */
-		query_len = strlen(query_insert) + strlen(PS(session_name)) + escaped_data_len + 16;
-		query = emalloc(query_len + 1);
-		snprintf(query, query_len, query_insert, time(NULL), PS(session_name), escaped_data);
-		pg_result = PQexec(pg_link, query);
+		params[0] = now_str;
+		params[1] = PS(session_name);
+		params[2] = buf.c;
+		pg_result = PQexecPrepared(pg_link, "APP_WRITE_INSERT", 3, (const char * const*)params, NULL, NULL, 0);
 		if (PQresultStatus(pg_result) != PGRES_COMMAND_OK) {
 			php_error(E_WARNING, "Session pgsql $_APP write(insert) failed. (%s)", PQerrorMessage(pg_link) TSRMLS_CC);
 		}
 	}
 	else {
 		/* UPDATE */
-		query_len = strlen(query_insert) + escaped_data_len + 16;
-		query = emalloc(query_len + 1);
-		snprintf(query, query_len, query_update, time(NULL), escaped_data);
-		pg_result = PQexec(pg_link, query);
+		params[0] = now_str;
+		params[1] = buf.c;
+		pg_result = PQexecPrepared(pg_link, "APP_WRITE_UPDATE", 2, (const char * const*)params, NULL, NULL, 0);
 		if (PQresultStatus(pg_result) != PGRES_COMMAND_OK) {
 			php_error(E_WARNING, "Session pgsql $_APP write(update) failed. (%s) ", PQerrorMessage(pg_link) TSRMLS_CC);
 		}
 	}
+	/* FIXME: possible leak on error */
 	PQclear(pg_result);
-	efree(query);
-	efree(escaped_data);
-
+	smart_str_free(&buf);
 	return SUCCESS;
 }
 /* }}} */
@@ -736,20 +783,21 @@ static int ps_pgsql_sess_read(const char *key, char **val, int *vallen TSRMLS_DC
 
 	/* start reading */
 	if (PS_PGSQL(serializable)) {
-		pg_result = PQexec(PS_PGSQL(current_db), "BEGIN; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;");
+		pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN_SERIALIZABEL", 0, NULL, NULL, NULL, 0);
 	}
 	else {
-		pg_result = PQexec(PS_PGSQL(current_db), "BEGIN;");
+		pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN", 0, NULL, NULL, NULL, 0);
 	}
 	PQclear(pg_result);
 	if (PQresultStatus(pg_result) != PGRES_COMMAND_OK) {
 		/* try again. server may be rebooted */
 		PQreset(PS_PGSQL(current_db));
+		php_ps_pgsql_prepare_sql(PS_PGSQL(current_db));
 		if (PS_PGSQL(serializable)) {
-			pg_result = PQexec(PS_PGSQL(current_db), "BEGIN; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;");
+			pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN_SERIALIZABEL", 0, NULL, NULL, NULL, 0);
 		}
 		else {
-			pg_result = PQexec(PS_PGSQL(current_db), "BEGIN;");
+			pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_BEGIN", 0, NULL, NULL, NULL, 0);
 		}
 		if (PQresultStatus(pg_result) != PGRES_COMMAND_OK) {
 			php_error(E_WARNING, "session pgsql: Cannot start transaction. (%s)", PQresultErrorMessage(pg_result));
@@ -759,13 +807,12 @@ static int ps_pgsql_sess_read(const char *key, char **val, int *vallen TSRMLS_DC
 		PQclear(pg_result);
 	}
 
-
 	PS_PGSQL(sess_new) = 0;
 	PS_PGSQL(sess_del) = 0;
 	*vallen = 0;
 	if (ps_pgsql_valid_str(key TSRMLS_CC)) {
 		snprintf(query, QUERY_BUF_SIZE, query_tpl, key);
-		pg_result = PQexec(PS_PGSQL(current_db), query);
+		pg_result = PQexecPrepared(PS_PGSQL(current_db), "READ_SELECT", 1, &key, NULL, NULL, 0);
 		if (PQresultStatus(pg_result) == PGRES_TUPLES_OK) {
 			if (PQntuples(pg_result) == 0) {
 				/* new session */
@@ -820,7 +867,7 @@ static int ps_pgsql_sess_read(const char *key, char **val, int *vallen TSRMLS_DC
 			PS_PGSQL(sess_del) = 1;
 			ret = SUCCESS;
 		}
-		PQclear(pg_result);	
+		PQclear(pg_result);
 	}
 	else {
 		PS_PGSQL(sess_new) = 1;
@@ -843,141 +890,82 @@ static int ps_pgsql_sess_read(const char *key, char **val, int *vallen TSRMLS_DC
 }
 /* }}} */
 
+
 /* {{{ ps_pgsql_sess_write
  */
 static int ps_pgsql_sess_write(const char *key, const char *val, const size_t vallen TSRMLS_DC) 
 {
 	PGresult *pg_result;
-	size_t query_len;
 	time_t now, exp;
-	char *query;
-	char *query_delete =
-	   "DELETE FROM php_session WHERE sess_id = '%s';";
-	char *query_insert =
-	   "INSERT INTO php_session (sess_id, sess_name, sess_created, sess_addr_created, sess_modified, sess_expire, sess_data, sess_counter, sess_error, sess_warning, sess_notice, sess_custom) "
-	   "VALUES ('%s', '%s', %d, '%s', %d, %d, '%s', 1, 0, 0, 0 %s);";
-	char *query_update =
-	   "UPDATE php_session SET sess_data = '%s', sess_modified = %d, sess_addr_modified = '%s', sess_expire = %d , sess_counter = %d, sess_error = %d, sess_warning = %d , sess_notice = %d %s"
-	   "WHERE sess_id = '%s';";
-	char *escaped_val, *escaped_custom;
-	smart_str buf= {0};
-	size_t custom_len, key_len;
+	char *params[9];
+	char now_str[STRBUF_LEN+1], exp_str[STRBUF_LEN+1], sess_cnt_str[STRBUF_LEN+1];
+	char sess_error_str[STRBUF_LEN+1], sess_warning_str[STRBUF_LEN+1], sess_notice_str[STRBUF_LEN+1];
 
 	if (!ps_pgsql_valid_str(key TSRMLS_CC)) {
 		return FAILURE;
 	}
 	
-	key_len = strlen(key);
 	if (PS_PGSQL(sess_del) && !PS_PGSQL(keep_expired)) {
-		query_len = strlen(query_delete) + key_len;
-		query = emalloc(query_len+1);
-		snprintf(query, query_len, query_delete, key);
-		pg_result = PQexec(PS_PGSQL(current_db), query);
+		pg_result = PQexecPrepared(PS_PGSQL(current_db), "WRITE_DELETE", 1, &key, NULL, NULL, 0);
 		PQclear(pg_result);
-		efree(query);
 		PS_PGSQL(sess_new) = 1;
 	}
 
 	now = time(NULL);
 	exp = now + PS(gc_maxlifetime);
-	query_len = key_len;
-	escaped_val = (char *)emalloc(vallen*2+1);
-	query_len += PQescapeStringConn(PS_PGSQL(current_db), escaped_val, val, vallen, NULL);
-	query_len += strlen(PS_PGSQL(remote_addr));
+	snprintf(now_str, STRBUF_LEN, "%d", now);
+	snprintf(exp_str, STRBUF_LEN, "%d", exp);
 	if (PS_PGSQL(sess_new)) {
-		char *escaped_sess_name;
-		size_t name_len;
 		/* INSERT */
-		query_len += strlen(query_insert);
-		if (PS_PGSQL(sess_custom) && PS_PGSQL(sess_custom)[0]) {
-			smart_str_appendl(&buf, ", '", 3);
-			custom_len = strlen(PS_PGSQL(sess_custom));
-			escaped_custom = (char *)emalloc(custom_len*2+1);
-			custom_len = PQescapeStringConn(PS_PGSQL(current_db), escaped_custom, PS_PGSQL(sess_custom), custom_len, NULL);
-			smart_str_appendl(&buf, escaped_custom, custom_len);
-			smart_str_appends(&buf, "' ");
-			smart_str_0(&buf);
-			efree(escaped_custom);
-		}
-		else {
-			smart_str_appends(&buf, ", ''");
-			smart_str_0(&buf);
-		}
-		query_len += buf.len;
-		name_len = strlen(PS(session_name));
-		escaped_sess_name = (char *)emalloc(name_len*2+1);
-		query_len += PQescapeStringConn(PS_PGSQL(current_db), escaped_sess_name, PS(session_name), name_len, NULL);
-		query_len += 32*3; /* 32 bytes for an int should be enough */ 
-		query = emalloc(query_len+1);
-		snprintf(query, query_len, query_insert,
-				 key, escaped_sess_name, now, PS_PGSQL(remote_addr), now, exp, escaped_val, buf.c);
-		pg_result = PQexec(PS_PGSQL(current_db), query);
+		params[0] = key;
+		params[1] = PS(session_name);
+		params[2] = now_str;
+		params[3] = PS_PGSQL(remote_addr);
+		params[4] = now_str;
+		params[5] = exp_str;
+		params[6] = val;
+		params[7] = PS_PGSQL(sess_custom);
+		pg_result = PQexecPrepared(PS_PGSQL(current_db), "WRITE_INSERT", 8, (const char * const*)params, NULL, NULL, 0);
 		PQclear(pg_result);
-		smart_str_free(&buf);
-		efree(escaped_sess_name);
-		efree(query);
 	}
 	else if (!PS_PGSQL(sess_short_circuit) || vallen != PS_PGSQL(sess_vallen) || strncmp(val, PS_PGSQL(sess_val), PS_PGSQL(sess_vallen))) {
 		/* UPDATE - skip updating if possible */
-		query_len += strlen(query_update);
-		if (PS_PGSQL(sess_custom) && PS_PGSQL(sess_custom)[0]) {
-			smart_str_appends(&buf, ", sess_custom = '");
-			custom_len = strlen(PS_PGSQL(sess_custom));
-			escaped_custom = (char *)emalloc(custom_len*2+1);
-			custom_len = PQescapeStringConn(PS_PGSQL(current_db), escaped_custom, PS_PGSQL(sess_custom), custom_len, NULL);
-			smart_str_appendl(&buf, escaped_custom, custom_len);
-			smart_str_appends(&buf, "' ");
-			smart_str_0(&buf);
-			efree(escaped_custom);
-		}
-		else {
-			smart_str_appends(&buf, "");
-			smart_str_0(&buf);
-		}
-		query_len += buf.len;
-		query_len += 32*6;  /* 32 bytes for an int should be enough */ 
-		query = emalloc(query_len+1);
-		snprintf(query, query_len, query_update,
-				 escaped_val, now, PS_PGSQL(remote_addr), exp, PS_PGSQL(sess_cnt),
-				 PS_PGSQL(sess_error), PS_PGSQL(sess_warning), PS_PGSQL(sess_notice), buf.c, key);
-		pg_result = PQexec(PS_PGSQL(current_db), query);
+		/* snprintf(query, query_len, query_update, */
+		/* 		 escaped_val, now, PS_PGSQL(remote_addr), exp, PS_PGSQL(sess_cnt), */
+		/* 		 PS_PGSQL(sess_error), PS_PGSQL(sess_warning), PS_PGSQL(sess_notice), buf.c, key); */
+		snprintf(sess_cnt_str, STRBUF_LEN, "%d", PS_PGSQL(sess_cnt));
+		snprintf(sess_error_str, STRBUF_LEN, "%d", PS_PGSQL(sess_error));
+		snprintf(sess_warning_str, STRBUF_LEN, "%d", PS_PGSQL(sess_warning));
+		snprintf(sess_notice_str, STRBUF_LEN, "%d", PS_PGSQL(sess_notice));
+		params[0] = val;
+		params[1] = now_str;
+		params[2] = PS_PGSQL(remote_addr);
+		params[3] = exp_str;
+		params[4] = sess_cnt_str;
+		params[5] = sess_error_str;
+		params[6] = sess_warning_str;
+		params[7] = sess_notice_str;
+		params[8] = PS_PGSQL(sess_custom);
+		params[9] = key;
+		pg_result = PQexecPrepared(PS_PGSQL(current_db), "WRITE_UPDATE", 10, (const char * const*)params, NULL, NULL, 0);
 		PQclear(pg_result);
-		smart_str_free(&buf);
-		efree(query);
 	}
 
 	/* save error message is any */
 	if (PS_PGSQL(sess_error_message)) {
-		char *escaped_error_message;
-		size_t len, error_message_len;
-		smart_str buf = {0};
-
-		len = strlen(PS_PGSQL(sess_error_message));
-		escaped_error_message = (char *)emalloc(len*2+1);
-		error_message_len = PQescapeStringConn(PS_PGSQL(current_db), escaped_error_message, PS_PGSQL(sess_error_message), len, NULL);
-		smart_str_appends(&buf, "UPDATE php_session SET sess_err_message = '");
-		smart_str_appendl(&buf, escaped_error_message, error_message_len);
-		smart_str_appends(&buf, "' WHERE sess_id='");
-		smart_str_appends(&buf, key);
-		smart_str_appendl(&buf, "';", 2);
-		smart_str_0(&buf);
-		
-		pg_result = PQexec(PS_PGSQL(current_db), buf.c);
-
+		params[0] = PS_PGSQL(sess_error_message);
+		params[1] = key;
+		pg_result = PQexecPrepared(PS_PGSQL(current_db), "WRITE_ERROR", 2, (const char * const*)params, NULL, NULL, 0);
 		PQclear(pg_result);
-		smart_str_free(&buf);
-		efree(escaped_error_message);
 	}
-	efree(escaped_val);
-	
-	pg_result = PQexec(PS_PGSQL(current_db), "END;");
+
+	pg_result = PQexecPrepared(PS_PGSQL(current_db), "WRITE_END", 0, NULL, NULL, NULL, 0);
 	if (PQresultStatus(pg_result) != PGRES_COMMAND_OK) {
 		PQclear(pg_result);
 		return FAILURE;
 	}
 	PQclear(pg_result);
-	
-	return SUCCESS;	
+	return SUCCESS;
 }
 /* }}} */
 
