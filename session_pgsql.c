@@ -534,9 +534,9 @@ static PGconn *php_ps_pgsql_connect(const int id TSRMLS_DC)
 		PQreset(PS_PGSQL(pgsql_link)[id]); /* reset connection. database server may be rebooted */
 		if (PQstatus(PS_PGSQL(pgsql_link)[id]) == CONNECTION_BAD) {
 			/* seems it's really dead */
+			php_error(E_WARNING, "session pgsql: PostgreSQL server connection is broken or bad connection string (%s): '%s'", PS_PGSQL(connstr)[id], PQerrorMessage(PS_PGSQL(pgsql_link)[id]));
 			PQfinish(PS_PGSQL(pgsql_link)[id]);
 			PS_PGSQL(pgsql_link)[id] = NULL;
-			php_error(E_WARNING, "session pgsql: PostgreSQL server connection is broken or bad connection string (%s)", PS_PGSQL(connstr)[id]);
 			return NULL;
 		}
 	}
