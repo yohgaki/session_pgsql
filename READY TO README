@@ -18,13 +18,13 @@ provides session storage using PostgreSQL database server(s).
 
 It is design to scale any size of web sites.
 
-[Requirements]
+[Requirements php]
 PHP 4.3.0 or later
 PostgreSQL 7.2.0 or later as server
 libpq that comes with PostgreSQL 7.2.0 or later (and header to build)
 libmm (and header. I use mm-1.2.1)
 
-[How to compile]
+[KNOW How to compile]
 
 To compile PHP with mod_pgsql, you need "--with-session-pgsql[=DIR]"
 when you configure PHP. [=DIR] is installation path for
@@ -42,7 +42,7 @@ your system must have libmm and headers installed to compile.
    % ./buildconf
    % ./configure --with-session-pgsql <other configure options>
    % make
-   % make install
+   % make it install
 4. If you choose to build stand alone module with "--with-session-pgsql=shared"
    Do not forget to edit php.ini to load session_pgsql.so.
 5. Reboot your web server.
